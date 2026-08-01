@@ -51,21 +51,21 @@ class SRVGGNetCompact(nn.Module):
         for layer in self.body:
             out = layer(out)
         out = self.upsampler(out)
-        # ⚠️ OPEN ITEM (2026-08-01, found reviewing this recipe against the Moebius port).
-        # `F.interpolate(..., mode="nearest")` survives torch.export into the asset as
-        # `primitive.interpolate_v1` / `upsample_nearest2d` (verified: `strings main.mlirb`
-        # on the SHIPPED realesr_general_x4v3 asset finds both). The Moebius export found that
-        # MPSGraph's segmenter REJECTS nearest-mode interpolate and routes those ops to the BNNS
-        # (CPU) backend, inserting GPU->CPU->GPU copies; every later CoreAI export in this fleet
-        # therefore replaces it with `repeat_interleave`, which is mathematically identical for
-        # integer scale factors:
-        #     base = x.repeat_interleave(self.upscale, dim=-2).repeat_interleave(self.upscale, dim=-1)
-        # IMPACT HERE IS UNQUANTIFIED and may be small: the shipped assets still measure
-        # 2.10-2.60 ms/tile on the GPU lane (FASTER than the ANE lane's 5.45 ms, and consistent
-        # with V13's CoreAI-GPU vs MLX-GPU 2.2-2.4x), so the graph is clearly not crippled. But
-        # there is one upsample per tile and ~144 tiles per 1080p frame, so a per-tile round trip
-        # would compound. TO CLOSE: re-export one variant with the line below swapped in, probe
-        # both lanes per-tile, and republish only if it measurably wins.
+        # ✅ CLOSED 2026-08-01 — MEASURED, and the "fix" was REJECTED. Keep `F.interpolate`.
+        # The Moebius CoreAI export replaces nearest-interpolate with `repeat_interleave` because
+        # MPSGraph's segmenter is documented to reject nearest-mode interpolate and route it to
+        # BNNS/CPU. This asset DOES carry the op (`strings main.mlirb` finds
+        # primitive.interpolate_v1 / upsample_nearest2d), so the patch looked overdue here.
+        # It is not. A/B on this exact model, 128² tile, M5 Max, median of 20 after warmup:
+        #     GPU lane:  patched 2.17 ms  vs  shipped 2.19 ms   (no difference)
+        #     ANE lane:  patched 6.74 ms  vs  shipped 5.79 ms   (patched 16% SLOWER)
+        # The patched export genuinely drops the op (strings finds nothing), so the rewrite worked
+        # — it just doesn't pay here, and on the ANE it costs. Plausibly `repeat_interleave`
+        # materialises the 4× tensor explicitly where the native op is handled better.
+        # LESSON: the repeat_interleave patch is NOT a universal CoreAI hygiene step. It is
+        # architecture- and shape-dependent, and must be A/B'd per port rather than applied by
+        # reflex. (Its value for Moebius is itself UNMEASURED — it was applied there from the
+        # upstream comment, never compared against an unpatched export.)
         base = F.interpolate(x, scale_factor=self.upscale, mode="nearest")
         return out + base
 
