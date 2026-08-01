@@ -51,6 +51,21 @@ class SRVGGNetCompact(nn.Module):
         for layer in self.body:
             out = layer(out)
         out = self.upsampler(out)
+        # ⚠️ OPEN ITEM (2026-08-01, found reviewing this recipe against the Moebius port).
+        # `F.interpolate(..., mode="nearest")` survives torch.export into the asset as
+        # `primitive.interpolate_v1` / `upsample_nearest2d` (verified: `strings main.mlirb`
+        # on the SHIPPED realesr_general_x4v3 asset finds both). The Moebius export found that
+        # MPSGraph's segmenter REJECTS nearest-mode interpolate and routes those ops to the BNNS
+        # (CPU) backend, inserting GPU->CPU->GPU copies; every later CoreAI export in this fleet
+        # therefore replaces it with `repeat_interleave`, which is mathematically identical for
+        # integer scale factors:
+        #     base = x.repeat_interleave(self.upscale, dim=-2).repeat_interleave(self.upscale, dim=-1)
+        # IMPACT HERE IS UNQUANTIFIED and may be small: the shipped assets still measure
+        # 2.10-2.60 ms/tile on the GPU lane (FASTER than the ANE lane's 5.45 ms, and consistent
+        # with V13's CoreAI-GPU vs MLX-GPU 2.2-2.4x), so the graph is clearly not crippled. But
+        # there is one upsample per tile and ~144 tiles per 1080p frame, so a per-tile round trip
+        # would compound. TO CLOSE: re-export one variant with the line below swapped in, probe
+        # both lanes per-tile, and republish only if it measurably wins.
         base = F.interpolate(x, scale_factor=self.upscale, mode="nearest")
         return out + base
 
