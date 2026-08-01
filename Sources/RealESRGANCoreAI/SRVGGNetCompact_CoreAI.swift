@@ -134,6 +134,9 @@ public final class SRVGGNetCompact_CoreAI: @unchecked Sendable {
 
         for ty in ys {
             for tx in xs {
+                // Cooperative cancellation: one checkpoint per tile — the same cadence the MLX
+                // sibling's tile driver uses, so the engine's CAN gate holds on either backend.
+                try Task.checkCancellation()
                 // Fill the tile (edge-clamped reads for the partial tiles at the frame border).
                 input.mutableView(as: Float16.self).withUnsafeMutablePointer { ptr, _, _ in
                     for c in 0 ..< 3 {

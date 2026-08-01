@@ -21,6 +21,13 @@ let package = Package(
     platforms: [.macOS("27.0")],
     products: [
         .library(name: "RealESRGANCoreAI", targets: ["RealESRGANCoreAI"]),
+        // The MLXEngine `imageUpscale` package over the core — registerable beside the MLX sibling
+        // as a second backend behind the same capability. ⚠️ Depends on MLXToolKit ONLY (the
+        // engine's dependency-free contract layer): this product carries NO MLX.
+        .library(name: "CoreAIRealESRGAN", targets: ["CoreAIRealESRGAN"]),
+    ],
+    dependencies: [
+        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.40.0"),
     ],
     targets: [
         .target(
@@ -33,5 +40,11 @@ let package = Package(
             linkerSettings: [.linkedFramework("CoreAI")]
         ),
         .testTarget(name: "RealESRGANCoreAITests", dependencies: ["RealESRGANCoreAI"]),
+        .target(name: "CoreAIRealESRGAN",
+                dependencies: [
+                    "RealESRGANCoreAI",
+                    .product(name: "MLXToolKit", package: "mlx-engine-swift"),
+                ]),
+        .testTarget(name: "CoreAIRealESRGANTests", dependencies: ["CoreAIRealESRGAN"]),
     ]
 )
