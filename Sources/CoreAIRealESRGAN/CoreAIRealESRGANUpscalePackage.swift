@@ -17,6 +17,7 @@
 // the two backends must be interchangeable behind a planner, so any behavioural divergence here is
 // a defect, not a feature.
 
+import Accelerate
 import CoreGraphics
 import CoreImage
 import CoreVideo
@@ -192,16 +193,38 @@ public final class CoreAIRealESRGANUpscalePackage: ModelPackage {
         return CGImageDestinationFinalize(dest) ? out as Data : nil
     }
 
+    /// Lanczos reduction of `cg` to `width`×`height` (vImage; AB-T-0232, the AB-T-0225 fix). The native frame is drawn
+    /// 1:1 into a known RGBA8 layout (no resampling), then scaled. The CoreGraphics `.high` draw this replaces sampled
+    /// on a corner-aligned grid, so a reduction drifted ±0.26 px from the centre to the edges (AB-R-0502).
     nonisolated static func resize(_ cg: CGImage, width: Int, height: Int) throws -> CGImage {
-        guard width > 0, height > 0,
-              let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
-                                  bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-            throw CoreAIRealESRGANPackageError.imageEncodeFailed
+        guard width > 0, height > 0 else { throw CoreAIRealESRGANPackageError.imageEncodeFailed }
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        let info = CGImageAlphaInfo.premultipliedLast.rawValue
+        let (sw, sh) = (cg.width, cg.height)
+        var src = [UInt8](repeating: 0, count: sw * sh * 4)
+        var dst = [UInt8](repeating: 0, count: width * height * 4)
+        let drawn = src.withUnsafeMutableBytes { s -> Bool in
+            guard let ctx = CGContext(data: s.baseAddress, width: sw, height: sh, bitsPerComponent: 8, bytesPerRow: sw * 4,
+                                      space: space, bitmapInfo: info) else { return false }
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: sw, height: sh))
+            return true
         }
-        ctx.interpolationQuality = .high
-        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
-        guard let out = ctx.makeImage() else { throw CoreAIRealESRGANPackageError.imageEncodeFailed }
+        guard drawn else { throw CoreAIRealESRGANPackageError.imageEncodeFailed }
+        let err = src.withUnsafeMutableBytes { s in
+            dst.withUnsafeMutableBytes { d in
+                var sb = vImage_Buffer(data: s.baseAddress, height: vImagePixelCount(sh), width: vImagePixelCount(sw),
+                                       rowBytes: sw * 4)
+                var db = vImage_Buffer(data: d.baseAddress, height: vImagePixelCount(height),
+                                       width: vImagePixelCount(width), rowBytes: width * 4)
+                return vImageScale_ARGB8888(&sb, &db, nil, vImage_Flags(kvImageNoFlags))
+            }
+        }
+        guard err == kvImageNoError else { throw CoreAIRealESRGANPackageError.imageEncodeFailed }
+        let out = dst.withUnsafeMutableBytes { d in
+            CGContext(data: d.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                      space: space, bitmapInfo: info)?.makeImage()
+        }
+        guard let out else { throw CoreAIRealESRGANPackageError.imageEncodeFailed }
         return out
     }
 }

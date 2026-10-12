@@ -32,6 +32,50 @@ struct ManifestTests {
     }
 }
 
+@Suite("Sub-native scale")
+struct SubNativeResizeTests {
+    /// AB-T-0232 (the AB-T-0225 fix, here): the sub-native reduction stays registered across the whole frame. 2×2
+    /// white blocks on black near both corners and at the centre must stay centred on their output pixel. The
+    /// CoreGraphics `.high` draw this replaced drifted ±0.26 px toward the edges (AB-R-0502).
+    @Test func resizeStaysRegisteredAcrossTheFrame() throws {
+        let n = 512, spots = [8, 256, 496]
+        var rgba = [UInt8](repeating: 0, count: n * n * 4)
+        for y in 0..<n {
+            for x in 0..<n {
+                let white = spots.contains { ($0..<($0 + 2)).contains(x) && ($0..<($0 + 2)).contains(y) }
+                for c in 0..<4 where c == 3 || white { rgba[(y * n + x) * 4 + c] = 255 }
+            }
+        }
+        let provider = try #require(CGDataProvider(data: Data(rgba) as CFData))
+        let cg = try #require(CGImage(width: n, height: n, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: n * 4,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                                      provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+        let scaled = try CoreAIRealESRGANUpscalePackage.resize(cg, width: n / 2, height: n / 2)
+        #expect(scaled.width == n / 2 && scaled.height == n / 2)
+        // Read it back in a known RGBA8 layout (a same-size draw: no resampling).
+        let m = n / 2
+        var out = [UInt8](repeating: 0, count: m * m * 4)
+        out.withUnsafeMutableBytes { buf in
+            let ctx = CGContext(data: buf.baseAddress, width: m, height: m, bitsPerComponent: 8, bytesPerRow: m * 4,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            ctx?.draw(scaled, in: CGRect(x: 0, y: 0, width: m, height: m))
+        }
+        for p in spots {
+            let c = p / 2
+            var sum = 0.0, sx = 0.0, sy = 0.0
+            for y in (c - 4)...(c + 4) {
+                for x in (c - 4)...(c + 4) {
+                    let v = Double(out[(y * m + x) * 4]); sum += v; sx += v * Double(x); sy += v * Double(y)
+                }
+            }
+            #expect(abs(sx / sum - Double(c)) < 0.02 && abs(sy / sum - Double(c)) < 0.02,
+                    "block at \(p): centroid (\(sx / sum), \(sy / sum)), want (\(c), \(c))")
+        }
+    }
+}
+
 @Suite("Engine path, live")
 struct LivePackageTests {
     /// The full contract: decode → tiled ANE upscale → sub-native downsample honored →

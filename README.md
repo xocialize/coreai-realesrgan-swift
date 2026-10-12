@@ -51,6 +51,17 @@ Compositing is the normalized feathered blend (Σwᵢxᵢ/Σwᵢ in float32, qua
 Full pipeline (ANE + Swift compositor vs a torch-fp32 + numpy oracle with identical grid/feather,
 300×200→1200×800): **66.85 dB, max |Δ| = 1 LSB, 1.3 % of pixels differ at all.**
 
+## Sub-native scale is a Lanczos reduction (0.2.1)
+
+A sub-native `scale` (×1–×3 from the native ×4) is now a vImage Lanczos reduction (AB-T-0232; the AB-T-0225 fix in mlx-realplksr-swift / mlx-heart-swift 0.2.1).
+- **The defect:** the CoreGraphics `.high` draw it replaces sampled on a corner-aligned grid. A reduction drifted
+  ±0.26 px from the centre toward the edges.
+- **What it cost** RealPLKSR and HEART at ×2: 1.7–2.8 dB on drawn content, ~0.2 dB on photos (AB-R-0502).
+- **Where it applied here:** every sub-native request. The native frame is drawn 1:1 into RGBA8, then scaled.
+- **Test:** `resizeStaysRegisteredAcrossTheFrame` (blocks near both corners and the centre) failed on the old draw (4.26
+  for 4.00) and passes here.
+- **Unchanged:** native-scale outputs.
+
 ## Provenance
 
 Weights are the **original** released checkpoints from
